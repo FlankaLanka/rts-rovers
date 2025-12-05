@@ -17,17 +17,24 @@ bool Renderer::init() {
     glEnable(GL_PROGRAM_POINT_SIZE);
 
     m_roverRenderer = std::make_unique<RoverRenderer>();
-    m_pointCloudRenderer = std::make_unique<PointCloudRenderer>();
     m_terrainRenderer = std::make_unique<TerrainRenderer>();
+
+    // Create separate point cloud renderer for each rover
+    for (int i = 0; i < NUM_ROVERS; i++) {
+        m_pointCloudRenderers[i] = std::make_unique<PointCloudRenderer>();
+    }
 
     if (!m_roverRenderer->init()) {
         std::cerr << "Failed to initialize rover renderer\n";
         return false;
     }
     
-    if (!m_pointCloudRenderer->init()) {
-        std::cerr << "Failed to initialize point cloud renderer\n";
-        return false;
+    // Initialize all point cloud renderers
+    for (int i = 0; i < NUM_ROVERS; i++) {
+        if (!m_pointCloudRenderers[i]->init()) {
+            std::cerr << "Failed to initialize point cloud renderer for rover " << (i+1) << "\n";
+            return false;
+        }
     }
     
     if (!m_terrainRenderer->init()) {
@@ -47,12 +54,14 @@ void Renderer::end() {
     // Nothing specific needed
 }
 
-void Renderer::renderRover(const RoverState& rover, const glm::vec3& color, bool selected) {
-    m_roverRenderer->render(rover, color, selected, m_view, m_projection);
+void Renderer::renderRover(const RoverState& rover, const glm::vec3& color, bool selected, bool engineRunning) {
+    m_roverRenderer->render(rover, color, selected, engineRunning, m_view, m_projection);
 }
 
-void Renderer::renderPointCloud(PointCloud& cloud, const RenderSettings& settings) {
-    m_pointCloudRenderer->render(cloud, settings, m_view, m_projection);
+void Renderer::renderPointCloud(int roverIndex, PointCloud& cloud, const RenderSettings& settings) {
+    if (roverIndex >= 0 && roverIndex < NUM_ROVERS) {
+        m_pointCloudRenderers[roverIndex]->render(cloud, settings, m_view, m_projection);
+    }
 }
 
 void Renderer::renderTerrain(TerrainGrid& terrain, const RenderSettings& settings) {
@@ -60,4 +69,3 @@ void Renderer::renderTerrain(TerrainGrid& terrain, const RenderSettings& setting
 }
 
 } // namespace terrafirma
-

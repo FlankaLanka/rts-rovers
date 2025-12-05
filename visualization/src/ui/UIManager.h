@@ -4,6 +4,7 @@
 #include "ui/SciFiTheme.h"
 #include "data/DataManager.h"
 #include "render/Camera.h"
+#include "network/UDPReceiver.h"
 
 struct GLFWwindow;
 
@@ -17,7 +18,8 @@ public:
     void begin();
     void end();
     
-    void renderMainUI(DataManager* dataManager, int& selectedRover, bool& followRover,
+    void renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
+                      int& selectedRover, bool& followRover,
                       RenderSettings& settings, float fps, Camera* camera);
     
     bool wantCaptureMouse() const;
@@ -25,7 +27,8 @@ public:
 
 private:
     void renderRoverPanel(DataManager* dataManager, int& selectedRover);
-    void renderStatusPanel(DataManager* dataManager, int selectedRover, bool& followRover, Camera* camera);
+    void renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
+                           int selectedRover, bool& followRover, Camera* camera);
     void renderSettingsPanel(RenderSettings& settings);
     void renderSystemPanel(DataManager* dataManager, float fps);
     

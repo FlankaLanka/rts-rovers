@@ -148,6 +148,7 @@ bool parseLine(const std::string& line,
     }
 
     // 3) Parse the rest of the line for points, each separated by ';'
+    std::vector<LidarPoint> pointTokens_parsed;
     std::vector<std::string> pointTokens = splitString(pointsPart, ';');
     cloud.clear();
     cloud.reserve(pointTokens.size());
@@ -225,101 +226,129 @@ int main(int argc, char** argv)
         }
     }
 
-    uint8_t buttonStates = 0;
+    // Button states - bit 0 controls engine (pause/resume)
+    // Start with engine ON (bit 0 = 1)
+    uint8_t buttonStates = 0x01;
 
     const double freqHz = 10.0;
     const std::chrono::milliseconds loopDelayMs((int)(1000.0 / freqHz));
 
     auto startTime = std::chrono::steady_clock::now();
 
-    // Read line by line
+    // Current line data (preserved when paused)
     std::string line;
+    float posX=0, posY=0, posZ=0;
+    float rotX=0, rotY=0, rotZ=0;
+    std::vector<LidarPoint> cloud;
+    bool hasData = false;  // Whether we have valid data to send
+    
+    std::cout << "Rover " << roverID << " emulator started (engine ON by default)\n";
+
+    // Main loop
     while (true) {
-        if (!std::getline(fin, line)) {
-            // End of file
-            break;
-        }
-        if (line.empty()) {
-            continue;
-        }
-
-        float posX=0, posY=0, posZ=0;
-        float rotX=0, rotY=0, rotZ=0;
-        std::vector<LidarPoint> cloud;
-
-        if (!parseLine(line, posX, posY, posZ, rotX, rotY, rotZ, cloud)) {
-            std::cerr << "Failed to parse line.\n";
-            continue;
-        }
-
-        // Inject noise if !noNoise:
-        if (!noNoise) {
-            posX += dist(rng);
-            posY += dist(rng);
-            posZ += dist(rng);
-            rotX += dist(rng);
-            rotY += dist(rng);
-            rotZ += dist(rng);
-            for (auto& p : cloud) {
-                p.x += dist(rng);
-                p.y += dist(rng);
-                p.z += dist(rng);
+        // Check for incoming button command on cmdSock (non-blocking)
+        uint8_t cmdByte = 0;
+        ssize_t n = recv(cmdSock, &cmdByte, 1, MSG_DONTWAIT);
+        if (n == 1) {
+            uint8_t oldState = buttonStates;
+            buttonStates = cmdByte;
+            
+            // Log state changes for debugging
+            bool wasRunning = (oldState & 0x01) != 0;
+            bool nowRunning = (buttonStates & 0x01) != 0;
+            if (wasRunning != nowRunning) {
+                std::cout << "Rover " << roverID << " engine " 
+                          << (nowRunning ? "STARTED" : "STOPPED") << "\n";
             }
         }
+
+        // Check if engine is running (bit 0)
+        bool engineRunning = (buttonStates & 0x01) != 0;
 
         // Create a timestamp (seconds since start)
         auto now = std::chrono::steady_clock::now();
         std::chrono::duration<double> elapsed = now - startTime;
         double timestamp = elapsed.count();
 
-        // 1) Build the PosePacket
-        PosePacket posePacket;
-        posePacket.timestamp = timestamp;
-        posePacket.posX = posX;
-        posePacket.posY = posY;
-        posePacket.posZ = posZ;
-        posePacket.rotXdeg = rotX;
-        posePacket.rotYdeg = rotY;
-        posePacket.rotZdeg = rotZ;
-
-        // 2) Send the pose over the pose port
-        sendUDP(udpSockPose, &posePacket, sizeof(posePacket), profile.posePort);
-
-        // 3) Break the LiDAR cloud into chunks of size <= MAX_LIDAR_POINTS_PER_PACKET
-        size_t totalPoints = cloud.size();
-        size_t totalChunks = (totalPoints + MAX_LIDAR_POINTS_PER_PACKET - 1) / MAX_LIDAR_POINTS_PER_PACKET;
-
-        // For each chunk, build a LidarPacket
-        for (size_t chunkIndex = 0; chunkIndex < totalChunks; ++chunkIndex) {
-            LidarPacket packet;
-            std::memset(&packet, 0, sizeof(packet));
-
-            packet.header.timestamp = timestamp;
-            packet.header.chunkIndex = static_cast<uint32_t>(chunkIndex);
-            packet.header.totalChunks = static_cast<uint32_t>(totalChunks);
-
-            // Fill points in this chunk
-            size_t startIdx = chunkIndex * MAX_LIDAR_POINTS_PER_PACKET;
-            size_t endIdx = std::min(startIdx + MAX_LIDAR_POINTS_PER_PACKET, totalPoints);
-            size_t numPts = endIdx - startIdx;
-            packet.header.pointsInThisChunk = static_cast<uint32_t>(numPts);
-
-            for (size_t i = 0; i < numPts; ++i) {
-                packet.points[i] = cloud[startIdx + i];
+        // Only read new data if engine is running
+        if (engineRunning) {
+            // Try to read next line
+            if (std::getline(fin, line)) {
+                if (!line.empty()) {
+                    if (parseLine(line, posX, posY, posZ, rotX, rotY, rotZ, cloud)) {
+                        hasData = true;
+                        
+                        // Inject noise if !noNoise:
+                        if (!noNoise) {
+                            posX += dist(rng);
+                            posY += dist(rng);
+                            posZ += dist(rng);
+                            rotX += dist(rng);
+                            rotY += dist(rng);
+                            rotZ += dist(rng);
+                            for (auto& p : cloud) {
+                                p.x += dist(rng);
+                                p.y += dist(rng);
+                                p.z += dist(rng);
+                            }
+                        }
+                    }
+                }
+            } else {
+                // End of file - stop the emulator
+                break;
             }
+        }
+        // When engine is stopped, we don't read new lines - data stays at last position
 
-            // Send the packet over the LiDAR port
-            size_t packetSize = sizeof(LidarPacketHeader) + (numPts * sizeof(LidarPoint));
-            sendUDP(udpSockLidar, &packet, packetSize, profile.lidarPort);
+        // Send pose data if we have it (even when paused, send last known position)
+        if (hasData) {
+            // 1) Build the PosePacket
+            PosePacket posePacket;
+            posePacket.timestamp = timestamp;
+            posePacket.posX = posX;
+            posePacket.posY = posY;
+            posePacket.posZ = posZ;
+            posePacket.rotXdeg = rotX;
+            posePacket.rotYdeg = rotY;
+            posePacket.rotZdeg = rotZ;
+
+            // 2) Send the pose over the pose port
+            sendUDP(udpSockPose, &posePacket, sizeof(posePacket), profile.posePort);
+
+            // 3) Only send LiDAR when engine is running (don't accumulate points when paused)
+            if (engineRunning) {
+                size_t totalPoints = cloud.size();
+                size_t totalChunks = (totalPoints + MAX_LIDAR_POINTS_PER_PACKET - 1) / MAX_LIDAR_POINTS_PER_PACKET;
+                if (totalChunks == 0) totalChunks = 1;
+
+                // For each chunk, build a LidarPacket
+                for (size_t chunkIndex = 0; chunkIndex < totalChunks; ++chunkIndex) {
+                    LidarPacket packet;
+                    std::memset(&packet, 0, sizeof(packet));
+
+                    packet.header.timestamp = timestamp;
+                    packet.header.chunkIndex = static_cast<uint32_t>(chunkIndex);
+                    packet.header.totalChunks = static_cast<uint32_t>(totalChunks);
+
+                    // Fill points in this chunk
+                    size_t startIdx = chunkIndex * MAX_LIDAR_POINTS_PER_PACKET;
+                    size_t endIdx = std::min(startIdx + MAX_LIDAR_POINTS_PER_PACKET, totalPoints);
+                    size_t numPts = endIdx - startIdx;
+                    packet.header.pointsInThisChunk = static_cast<uint32_t>(numPts);
+
+                    for (size_t i = 0; i < numPts; ++i) {
+                        packet.points[i] = cloud[startIdx + i];
+                    }
+
+                    // Send the packet over the LiDAR port
+                    size_t packetSize = sizeof(LidarPacketHeader) + (numPts * sizeof(LidarPoint));
+                    sendUDP(udpSockLidar, &packet, packetSize, profile.lidarPort);
+                }
+            }
         }
 
-        // 6) Check for incoming button command on cmdSock (non-blocking)
-        uint8_t cmdByte = 0;
-        ssize_t n = recv(cmdSock, &cmdByte, 1, MSG_DONTWAIT);
-        if (n == 1) {
-            // Update buttonStates with newly received bits
-            buttonStates = cmdByte;
-        }
+        // Always send telemetry (so visualization knows button state)
         VehicleTelem telem;
         telem.timestamp    = timestamp;
         telem.buttonStates = buttonStates;
@@ -327,13 +356,15 @@ int main(int argc, char** argv)
         int telemPort = profile.telemPort;
         sendUDP(udpSockTelem, &telem, sizeof(telem), telemPort);
 
-        // 4) Sleep the remainder of the 10 Hz cycle
+        // Sleep the remainder of the 10 Hz cycle
         std::this_thread::sleep_for(loopDelayMs);
     }
 
     // Clean up
     close(udpSockPose);
     close(udpSockLidar);
+    close(udpSockTelem);
+    close(cmdSock);
     fin.close();
 
     std::cout << "Finished streaming rover " << roverID << " data.\n";

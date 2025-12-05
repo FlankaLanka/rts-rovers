@@ -114,5 +114,17 @@ size_t DataManager::getTotalPointCount() const {
     return total;
 }
 
+bool DataManager::isRoverEngineRunning(int index) const {
+    if (index < 0 || index >= NUM_ROVERS) return false;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_rovers[index].isEngineRunning();
+}
+
+void DataManager::setRoverEngineRunning(int index, bool running) {
+    if (index < 0 || index >= NUM_ROVERS) return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_rovers[index].setEngineRunning(running);
+}
+
 } // namespace terrafirma
 

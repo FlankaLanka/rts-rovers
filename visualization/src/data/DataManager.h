@@ -55,6 +55,10 @@ public:
     TerrainGrid& getTerrainGrid();
     
     size_t getTotalPointCount() const;
+    
+    // Engine control (thread-safe)
+    bool isRoverEngineRunning(int index) const;
+    void setRoverEngineRunning(int index, bool running);
 
 private:
     std::array<RoverData, NUM_ROVERS> m_rovers;

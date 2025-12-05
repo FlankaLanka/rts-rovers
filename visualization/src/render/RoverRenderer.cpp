@@ -30,6 +30,7 @@ in vec3 FragPos;
 uniform vec3 color;
 uniform float alpha;
 uniform bool selected;
+uniform bool engineRunning;
 
 out vec4 FragColor;
 
@@ -40,6 +41,14 @@ void main() {
     float ambient = 0.3;
     
     vec3 result = color * (ambient + diff * 0.7);
+    
+    // Dim and desaturate when engine is stopped
+    if (!engineRunning) {
+        // Convert to grayscale and darken
+        float gray = dot(result, vec3(0.299, 0.587, 0.114));
+        result = mix(vec3(gray), result, 0.3) * 0.5;  // 70% desaturated, 50% brightness
+        result += vec3(0.1, 0.0, 0.0);  // Add slight red tint
+    }
     
     // Add glow for selected
     if (selected) {
@@ -174,7 +183,7 @@ void RoverRenderer::createRoverMesh() {
 }
 
 void RoverRenderer::render(const RoverState& rover, const glm::vec3& color, bool selected,
-                           const glm::mat4& view, const glm::mat4& projection) {
+                           bool engineRunning, const glm::mat4& view, const glm::mat4& projection) {
     m_shader.use();
     
     glm::mat4 model = rover.getModelMatrix();
@@ -185,6 +194,7 @@ void RoverRenderer::render(const RoverState& rover, const glm::vec3& color, bool
     m_shader.setVec3("color", color);
     m_shader.setFloat("alpha", rover.online ? 1.0f : 0.5f);
     m_shader.setInt("selected", selected ? 1 : 0);
+    m_shader.setInt("engineRunning", engineRunning ? 1 : 0);
 
     glBindVertexArray(m_vao);
     glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(m_indexCount), GL_UNSIGNED_INT, 0);

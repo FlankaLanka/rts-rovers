@@ -57,10 +57,10 @@ private:
     std::atomic<bool> m_running{false};
 
     // Input state
-    bool m_firstMouse = true;
     float m_lastX = 640.0f;
     float m_lastY = 360.0f;
     bool m_mouseCapture = false;
+    int m_skipCursorEvents = 0;  // Skip N cursor events after enabling capture
 
     // Selected rover
     int m_selectedRover = 0;

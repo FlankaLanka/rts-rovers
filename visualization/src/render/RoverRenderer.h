@@ -13,7 +13,7 @@ public:
 
     bool init();
     void render(const RoverState& rover, const glm::vec3& color, bool selected,
-                const glm::mat4& view, const glm::mat4& projection);
+                bool engineRunning, const glm::mat4& view, const glm::mat4& projection);
 
 private:
     void createRoverMesh();

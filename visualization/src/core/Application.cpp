@@ -135,11 +135,9 @@ void Application::processInput() {
     if (glfwGetKey(m_window, GLFW_KEY_D) == GLFW_PRESS)
         m_camera->moveRight(speed);
     
-    // Space/Shift - move up/down (always along Z axis)
+    // Space - move up (always along Y axis)
     if (glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS)
         m_camera->moveUp(speed);
-    if (glfwGetKey(m_window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
-        m_camera->moveUp(-speed);
 }
 
 void Application::update(float deltaTime) {
@@ -185,14 +183,15 @@ void Application::render() {
     for (int i = 0; i < NUM_ROVERS; i++) {
         auto& rover = m_dataManager->getRover(i);
         bool selected = (i == m_selectedRover);
-        m_renderer->renderRover(rover, ROVER_COLORS[i], selected);
+        bool engineRunning = m_dataManager->isRoverEngineRunning(i);
+        m_renderer->renderRover(rover, ROVER_COLORS[i], selected, engineRunning);
     }
 
-    // Render point clouds
+    // Render point clouds (each rover has its own GPU buffer)
     if (m_renderSettings.showPointCloud) {
         for (int i = 0; i < NUM_ROVERS; i++) {
             auto& pointCloud = m_dataManager->getPointCloud(i);
-            m_renderer->renderPointCloud(pointCloud, m_renderSettings);
+            m_renderer->renderPointCloud(i, pointCloud, m_renderSettings);
         }
     }
 
@@ -207,6 +206,7 @@ void Application::render() {
     m_uiManager->begin();
     m_uiManager->renderMainUI(
         m_dataManager.get(),
+        m_networkReceiver.get(),
         m_selectedRover,
         m_followRover,
         m_renderSettings,
@@ -282,8 +282,9 @@ void Application::mouseButtonCallback(GLFWwindow* window, int button, int action
 
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
         g_app->m_mouseCapture = true;
+        // Skip the next few cursor events to avoid snapping from GLFW cursor warp
+        g_app->m_skipCursorEvents = 2;
         glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-        g_app->m_firstMouse = true;
     }
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_RELEASE) {
         g_app->m_mouseCapture = false;
@@ -299,10 +300,12 @@ void Application::cursorPosCallback(GLFWwindow* window, double xpos, double ypos
     float x = static_cast<float>(xpos);
     float y = static_cast<float>(ypos);
 
-    if (g_app->m_firstMouse) {
+    // Skip initial cursor events after enabling capture to prevent snapping
+    if (g_app->m_skipCursorEvents > 0) {
+        g_app->m_skipCursorEvents--;
         g_app->m_lastX = x;
         g_app->m_lastY = y;
-        g_app->m_firstMouse = false;
+        return;  // Don't rotate, just record position
     }
 
     float xoffset = x - g_app->m_lastX;

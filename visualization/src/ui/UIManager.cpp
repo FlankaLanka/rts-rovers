@@ -37,22 +37,24 @@ void UIManager::end() {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
-void UIManager::renderMainUI(DataManager* dataManager, int& selectedRover, bool& followRover,
+void UIManager::renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
+                             int& selectedRover, bool& followRover,
                              RenderSettings& settings, float fps, Camera* camera) {
     renderRoverPanel(dataManager, selectedRover);
-    renderStatusPanel(dataManager, selectedRover, followRover, camera);
+    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera);
     renderSettingsPanel(settings);
     renderSystemPanel(dataManager, fps);
 }
 
 void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(250, 400), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(250, 450), ImGuiCond_FirstUseEver);
     
     ImGui::Begin("ROVER FLEET", nullptr, ImGuiWindowFlags_NoCollapse);
     
     for (int i = 0; i < NUM_ROVERS; i++) {
         auto& rover = dataManager->getRover(i);
+        bool engineRunning = dataManager->isRoverEngineRunning(i);
         
         ImGui::PushID(i);
         
@@ -62,7 +64,7 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.2f, 0.3f, 0.8f));
         }
         
-        ImGui::BeginChild(("rover" + std::to_string(i)).c_str(), ImVec2(-1, 70), true);
+        ImGui::BeginChild(("rover" + std::to_string(i)).c_str(), ImVec2(-1, 80), true);
         
         // Online indicator
         if (rover.online) {
@@ -75,6 +77,14 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
         // Rover name with color
         glm::vec3 color = ROVER_COLORS[i];
         ImGui::TextColored(ImVec4(color.r, color.g, color.b, 1.0f), "ROVER %02d", i + 1);
+        
+        // Engine status indicator (same line as rover name)
+        ImGui::SameLine();
+        if (engineRunning) {
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "[ON]");
+        } else {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "[OFF]");
+        }
         
         // Status
         ImGui::Text("Status: %s", rover.online ? "ONLINE" : "OFFLINE");
@@ -100,16 +110,29 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
     ImGui::End();
 }
 
-void UIManager::renderStatusPanel(DataManager* dataManager, int selectedRover, bool& followRover, Camera* camera) {
+void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
+                                   int selectedRover, bool& followRover, Camera* camera) {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 310, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 450), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
     
     auto& rover = dataManager->getRover(selectedRover);
+    bool engineRunning = dataManager->isRoverEngineRunning(selectedRover);
     
     char title[64];
     snprintf(title, sizeof(title), "ROVER %02d STATUS", selectedRover + 1);
     
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
+    
+    // Engine status indicator
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "ENGINE STATUS");
+    ImGui::Separator();
+    if (engineRunning) {
+        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "ENGINE: RUNNING");
+    } else {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "ENGINE: STOPPED");
+    }
+    
+    ImGui::Spacing();
     
     // Position
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "POSITION");
@@ -130,25 +153,63 @@ void UIManager::renderStatusPanel(DataManager* dataManager, int selectedRover, b
     ImGui::Spacing();
     
     // Button states
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "BUTTON STATES");
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "CONTROLS");
     ImGui::Separator();
     
     for (int i = 0; i < 4; i++) {
         bool isOn = (rover.buttonStates >> i) & 1;
         
-        if (isOn) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+        // Button 0 (engine): Green for ON, Red for OFF
+        // Other buttons: Orange for ON, Dark for OFF
+        if (i == 0) {
+            if (isOn) {
+                // Green for engine ON
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.6f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.7f, 0.3f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.8f, 0.4f, 1.0f));
+            } else {
+                // Red for engine OFF
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
+            }
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.25f, 1.0f));
+            if (isOn) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.7f, 0.3f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.25f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.35f, 1.0f));
+            }
         }
         
         char label[16];
-        snprintf(label, sizeof(label), "BTN %d", i);
-        ImGui::Button(label, ImVec2(60, 40));
+        if (i == 0) {
+            // Button 0 is engine control - show "ON" or "OFF"
+            snprintf(label, sizeof(label), isOn ? "ON" : "OFF");
+        } else {
+            // Other buttons show "BTN X" for now
+            snprintf(label, sizeof(label), "BTN %d", i);
+        }
         
-        ImGui::PopStyleColor(2);
+        // Make button 0 clickable to toggle engine
+        if (i == 0) {
+            if (ImGui::Button(label, ImVec2(60, 40))) {
+                // Toggle button 0 (engine)
+                uint8_t newState = rover.buttonStates ^ (1 << 0);
+                udpReceiver->sendCommand(selectedRover + 1, newState);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Click to %s engine", isOn ? "stop" : "start");
+            }
+        } else {
+            // Other buttons are display-only for now
+            ImGui::Button(label, ImVec2(60, 40));
+        }
+        
+        ImGui::PopStyleColor(3);
         
         if (i < 3) ImGui::SameLine();
     }

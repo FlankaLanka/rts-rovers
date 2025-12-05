@@ -103,7 +103,7 @@ void UDPReceiver::receivePackets() {
     for (int i = 0; i < NUM_ROVERS; i++) {
         int roverId = i + 1;
 
-        // Receive pose packets
+        // Receive pose packets - always process (emulator handles pause)
         while (true) {
             ssize_t n = recv(m_poseSockets[i], buffer, sizeof(buffer), 0);
             if (n <= 0) break;
@@ -115,7 +115,7 @@ void UDPReceiver::receivePackets() {
             }
         }
 
-        // Receive telemetry packets
+        // Receive telemetry packets - always process (needed for button state updates)
         while (true) {
             ssize_t n = recv(m_telemSockets[i], buffer, sizeof(buffer), 0);
             if (n <= 0) break;
@@ -127,7 +127,7 @@ void UDPReceiver::receivePackets() {
             }
         }
 
-        // Receive LiDAR packets
+        // Receive LiDAR packets - always process (emulator handles pause)
         while (true) {
             ssize_t n = recv(m_lidarSockets[i], buffer, sizeof(buffer), 0);
             if (n <= 0) break;
@@ -208,4 +208,3 @@ void UDPReceiver::shutdown() {
 }
 
 } // namespace terrafirma
-
