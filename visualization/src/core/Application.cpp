@@ -72,6 +72,8 @@ bool Application::init() {
     m_uiManager = std::make_unique<UIManager>(m_window);
     m_circleRenderer = std::make_unique<CircleRenderer>();
     m_opManager = std::make_unique<TerrainOperationManager>();
+    m_pathfinder = std::make_unique<AStar>();
+    m_pathRenderer = std::make_unique<PathRenderer>();
 
     if (!m_renderer->init()) {
         std::cerr << "Failed to initialize renderer\n";
@@ -80,6 +82,11 @@ bool Application::init() {
 
     if (!m_circleRenderer->init()) {
         std::cerr << "Failed to initialize circle renderer\n";
+        return false;
+    }
+
+    if (!m_pathRenderer->init()) {
+        std::cerr << "Failed to initialize path renderer\n";
         return false;
     }
 
@@ -119,6 +126,8 @@ void Application::shutdown() {
 
     m_uiManager.reset();
     m_circleRenderer.reset();
+    m_pathRenderer.reset();
+    m_pathfinder.reset();
     m_opManager.reset();
     m_renderer.reset();
     m_networkReceiver.reset();
@@ -204,8 +213,8 @@ void Application::processInput() {
 void Application::update(float deltaTime) {
     // Set manual control flags for all rovers (blocks UDP updates)
     for (int i = 0; i < NUM_ROVERS; i++) {
-        // Rover is controlled if in manual mode OR in a dig/pile operation
-        bool controlled = m_manualControl[i] || m_opManager->isRoverControlled(i);
+        // Rover is controlled if in manual mode, RTS/WAY mode, OR in a dig/pile operation
+        bool controlled = m_manualControl[i] || m_rtsMode[i] || m_wayMode[i] || m_opManager->isRoverControlled(i);
         m_dataManager->setRoverControlled(i, controlled);
     }
     
@@ -215,6 +224,24 @@ void Application::update(float deltaTime) {
     // Update terrain operations
     if (m_opManager) {
         m_opManager->update(deltaTime, *m_dataManager);
+    }
+    
+    // Update RTS/WAY pathfinding movement
+    for (int i = 0; i < NUM_ROVERS; i++) {
+        if (m_rtsMode[i] || m_wayMode[i]) {
+            if (m_hasPath[i]) {
+                updatePathMovement(i, deltaTime);
+            } else if (m_wayMode[i]) {
+                // WAY mode needs a waypoint - spawn one
+                spawnWaypoint(i);
+            }
+        } else {
+            // Clear path when mode is disabled
+            if (m_hasPath[i]) {
+                m_hasPath[i] = false;
+                m_currentPath[i].clear();
+            }
+        }
     }
     
     // Update rover online status using shared time source
@@ -346,6 +373,176 @@ void Application::handleCircleDrawing(double mouseX, double mouseY, bool pressed
     }
 }
 
+void Application::handleRTSClick(double mouseX, double mouseY) {
+    if (!m_rtsMode[m_selectedRover]) return;
+    
+    // Get framebuffer size for correct coordinate scaling
+    int fbWidth, fbHeight;
+    int winWidth, winHeight;
+    glfwGetFramebufferSize(m_window, &fbWidth, &fbHeight);
+    glfwGetWindowSize(m_window, &winWidth, &winHeight);
+    
+    float scaleX = (float)fbWidth / (float)winWidth;
+    float scaleY = (float)fbHeight / (float)winHeight;
+    float fbMouseX = (float)mouseX * scaleX;
+    float fbMouseY = (float)mouseY * scaleY;
+    
+    glm::mat4 view = m_camera->getViewMatrix();
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), 
+        (float)fbWidth / (float)fbHeight, 0.1f, 10000.0f);
+    
+    // Raycast to terrain
+    RaycastResult hit = raycastTerrain(
+        fbMouseX, fbMouseY,
+        fbWidth, fbHeight, view, projection,
+        m_dataManager->getTerrainGrid()
+    );
+    
+    // Fallback to plane intersection if no terrain hit
+    if (!hit.hit) {
+        auto& terrain = m_dataManager->getTerrainGrid();
+        float planeY = terrain.getCells().empty() ? 50.0f : 
+            (terrain.getMinHeight() + terrain.getMaxHeight()) * 0.5f;
+        
+        glm::vec3 rayOrigin, rayDir;
+        screenToWorldRay(fbMouseX, fbMouseY, fbWidth, fbHeight, view, projection, rayOrigin, rayDir);
+        
+        if (std::abs(rayDir.y) > 0.0001f) {
+            float t = (planeY - rayOrigin.y) / rayDir.y;
+            if (t > 0.0f) {
+                hit.hit = true;
+                hit.position = rayOrigin + rayDir * t;
+            }
+        }
+    }
+    
+    if (!hit.hit) return;
+    
+    // Get current rover position
+    auto& rover = m_dataManager->getRover(m_selectedRover);
+    
+    // Find path using A*
+    auto path = m_pathfinder->findPath(
+        m_dataManager->getTerrainGrid(),
+        rover.position,
+        hit.position
+    );
+    
+    if (path.empty()) {
+        std::cout << "RTS: No path found to destination\n";
+        return;
+    }
+    
+    // Store path
+    m_currentPath[m_selectedRover] = path;
+    m_pathIndex[m_selectedRover] = 0;
+    m_pathDestination[m_selectedRover] = hit.position;
+    m_hasPath[m_selectedRover] = true;
+    
+    std::cout << "RTS: Path found with " << path.size() << " waypoints\n";
+}
+
+void Application::updatePathMovement(int roverIndex, float deltaTime) {
+    auto& rover = m_dataManager->getRover(roverIndex);
+    auto& path = m_currentPath[roverIndex];
+    size_t& pathIdx = m_pathIndex[roverIndex];
+    
+    if (path.empty() || pathIdx >= path.size()) {
+        // Path complete
+        if (m_wayMode[roverIndex]) {
+            // WAY mode: spawn new waypoint
+            spawnWaypoint(roverIndex);
+        } else {
+            // RTS mode: clear path when done
+            m_hasPath[roverIndex] = false;
+            std::cout << "RTS: Rover " << (roverIndex + 1) << " reached destination\n";
+        }
+        return;
+    }
+    
+    // Get current waypoint
+    glm::vec3 waypoint = path[pathIdx];
+    
+    // Calculate direction to waypoint (XZ plane)
+    glm::vec2 roverXZ(rover.position.x, rover.position.z);
+    glm::vec2 waypointXZ(waypoint.x, waypoint.z);
+    glm::vec2 toWaypoint = waypointXZ - roverXZ;
+    float distance = glm::length(toWaypoint);
+    
+    if (distance < PATH_WAYPOINT_DIST) {
+        // Reached waypoint, advance to next
+        pathIdx++;
+        return;
+    }
+    
+    // Move toward waypoint
+    glm::vec2 direction = toWaypoint / distance;
+    float moveDistance = std::min(PATH_MOVE_SPEED * deltaTime, distance);
+    
+    roverXZ += direction * moveDistance;
+    rover.position.x = roverXZ.x;
+    rover.position.z = roverXZ.y;
+    
+    // Calculate yaw angle to face movement direction
+    float targetYaw = glm::degrees(std::atan2(direction.x, direction.y));
+    
+    // Smooth rotation
+    float yawDiff = targetYaw - rover.rotation.y;
+    while (yawDiff > 180.0f) yawDiff -= 360.0f;
+    while (yawDiff < -180.0f) yawDiff += 360.0f;
+    
+    float maxRotation = 180.0f * deltaTime;  // 180 deg/s rotation speed
+    yawDiff = glm::clamp(yawDiff, -maxRotation, maxRotation);
+    rover.rotation.y += yawDiff;
+    
+    // Keep level
+    rover.rotation.x = 0.0f;
+    rover.rotation.z = 0.0f;
+    
+    // Maintain hover height above terrain
+    float terrainHeight = m_dataManager->getTerrainGrid().getMinHeight();
+    getTerrainHeightAt(m_dataManager->getTerrainGrid(), rover.position.x, rover.position.z, terrainHeight);
+    rover.position.y = terrainHeight + PATH_HOVER_HEIGHT;
+}
+
+void Application::spawnWaypoint(int roverIndex) {
+    auto& rover = m_dataManager->getRover(roverIndex);
+    
+    // Find a random reachable position
+    glm::vec3 newTarget = m_pathfinder->findRandomReachable(
+        m_dataManager->getTerrainGrid(),
+        rover.position,
+        20.0f,  // min distance
+        50.0f   // max distance
+    );
+    
+    // If we couldn't find a valid target, the function returns the rover's position
+    if (glm::length(newTarget - rover.position) < 5.0f) {
+        std::cout << "WAY: Rover " << (roverIndex + 1) << " - no reachable waypoint found nearby\n";
+        return;
+    }
+    
+    // Find path to new target
+    auto path = m_pathfinder->findPath(
+        m_dataManager->getTerrainGrid(),
+        rover.position,
+        newTarget
+    );
+    
+    if (path.empty()) {
+        std::cout << "WAY: Rover " << (roverIndex + 1) << " - pathfinding failed\n";
+        return;
+    }
+    
+    // Store new path
+    m_currentPath[roverIndex] = path;
+    m_pathIndex[roverIndex] = 0;
+    m_pathDestination[roverIndex] = newTarget;
+    m_hasPath[roverIndex] = true;
+    
+    std::cout << "WAY: Rover " << (roverIndex + 1) << " - new waypoint spawned, " << path.size() << " waypoints\n";
+}
+
 void Application::render() {
     glClearColor(0.0f, 0.0f, 0.04f, 1.0f); // Deep space black
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -405,6 +602,40 @@ void Application::render() {
             }
         }
     }
+    
+    // Render paths for RTS/WAY modes
+    if (m_pathRenderer) {
+        for (int i = 0; i < NUM_ROVERS; i++) {
+            if ((m_rtsMode[i] || m_wayMode[i]) && m_hasPath[i] && !m_currentPath[i].empty()) {
+                // Get remaining path (from current waypoint to end)
+                size_t idx = m_pathIndex[i];
+                if (idx < m_currentPath[i].size()) {
+                    std::vector<glm::vec3> remainingPath(
+                        m_currentPath[i].begin() + idx,
+                        m_currentPath[i].end()
+                    );
+                    
+                    // Add rover's current position at the start
+                    auto& rover = m_dataManager->getRover(i);
+                    remainingPath.insert(remainingPath.begin(), rover.position);
+                    
+                    // Color based on mode
+                    glm::vec3 pathColor = m_rtsMode[i] ? 
+                        glm::vec3(0.2f, 1.0f, 0.3f) :   // Green for RTS
+                        glm::vec3(0.3f, 0.7f, 1.0f);    // Blue for WAY
+                    
+                    m_pathRenderer->renderPath(remainingPath, pathColor, 3.0f, view, projection);
+                    
+                    // Render destination marker
+                    glm::vec3 markerColor = m_rtsMode[i] ?
+                        glm::vec3(1.0f, 1.0f, 0.2f) :   // Yellow for RTS destination
+                        glm::vec3(0.2f, 1.0f, 1.0f);    // Cyan for WAY waypoint
+                    
+                    m_pathRenderer->renderMarker(m_pathDestination[i], markerColor, 5.0f, view, projection);
+                }
+            }
+        }
+    }
 
     // Render UI
     m_uiManager->begin();
@@ -417,7 +648,9 @@ void Application::render() {
         m_timer.getFPS(),
         m_camera.get(),
         m_opManager.get(),
-        &m_manualControl
+        &m_manualControl,
+        &m_rtsMode,
+        &m_wayMode
     );
     m_uiManager->end();
 }
@@ -512,6 +745,12 @@ void Application::mouseButtonCallback(GLFWwindow* window, int button, int action
                 g_app->handleCircleDrawing(mouseX, mouseY, pressed, released);
                 return;
             }
+        }
+        
+        // Handle RTS click (click to set destination)
+        if (pressed && g_app->m_rtsMode[g_app->m_selectedRover]) {
+            g_app->handleRTSClick(mouseX, mouseY);
+            return;
         }
     }
 

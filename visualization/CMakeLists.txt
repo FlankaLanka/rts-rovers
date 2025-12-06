@@ -74,6 +74,8 @@ set(APP_SOURCES
     src/render/CircleRenderer.cpp
     src/terrain/TerrainRaycast.cpp
     src/terrain/TerrainOperation.cpp
+    src/pathfinding/AStar.cpp
+    src/pathfinding/PathRenderer.cpp
     src/ui/UIManager.cpp
     src/ui/SciFiTheme.cpp
 )

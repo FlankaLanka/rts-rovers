@@ -42,9 +42,11 @@ void UIManager::renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
                              int& selectedRover, bool& followRover,
                              RenderSettings& settings, float fps, Camera* camera,
                              TerrainOperationManager* opManager,
-                             std::array<bool, NUM_ROVERS>* manualControl) {
+                             std::array<bool, NUM_ROVERS>* manualControl,
+                             std::array<bool, NUM_ROVERS>* rtsMode,
+                             std::array<bool, NUM_ROVERS>* wayMode) {
     renderRoverPanel(dataManager, selectedRover, manualControl);
-    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera, opManager, manualControl);
+    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera, opManager, manualControl, rtsMode, wayMode);
     renderSettingsPanel(settings);
     renderSystemPanel(dataManager, fps);
     
@@ -87,7 +89,7 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover,
         glm::vec3 color = ROVER_COLORS[i];
         ImGui::TextColored(ImVec4(color.r, color.g, color.b, 1.0f), "ROVER %02d", i + 1);
         
-        // Engine/Manual status indicator
+        // Engine/Manual/RTS/WAY status indicator
         ImGui::SameLine();
         if (!rover.online) {
             ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "[--]");
@@ -98,6 +100,7 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover,
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "[OFF]");
         }
+        // Note: RTS/WAY status is shown in status panel since we don't have access to those arrays here
         
         // Point count
         size_t points = dataManager->getPointCloud(i).getPointCount();
@@ -123,13 +126,17 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover,
 void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
                                    int selectedRover, bool& followRover, Camera* camera,
                                    TerrainOperationManager* opManager,
-                                   std::array<bool, NUM_ROVERS>* manualControl) {
+                                   std::array<bool, NUM_ROVERS>* manualControl,
+                                   std::array<bool, NUM_ROVERS>* rtsMode,
+                                   std::array<bool, NUM_ROVERS>* wayMode) {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 310, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 550), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(300, 600), ImGuiCond_FirstUseEver);  // Increased height for new buttons
     
     auto& rover = dataManager->getRover(selectedRover);
     bool engineRunning = dataManager->isRoverEngineRunning(selectedRover);
     bool isManualControl = manualControl && (*manualControl)[selectedRover];
+    bool isRtsMode = rtsMode && (*rtsMode)[selectedRover];
+    bool isWayMode = wayMode && (*wayMode)[selectedRover];
     
     char title[64];
     snprintf(title, sizeof(title), "ROVER %02d STATUS", selectedRover + 1);
@@ -139,7 +146,11 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
     // Engine/Control status indicator
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "STATUS");
     ImGui::Separator();
-    if (isManualControl) {
+    if (isRtsMode) {
+        ImGui::TextColored(ImVec4(0.6f, 0.3f, 1.0f, 1.0f), "RTS MODE - Click terrain to move");
+    } else if (isWayMode) {
+        ImGui::TextColored(ImVec4(0.3f, 0.8f, 1.0f, 1.0f), "WAYPOINT MODE - Auto exploring");
+    } else if (isManualControl) {
         ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "MANUAL CONTROL - WASD to drive");
     } else if (engineRunning) {
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "ENGINE: RUNNING");
@@ -306,6 +317,71 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
         ImGui::PopStyleColor(3);
         
         if (i < 3) ImGui::SameLine();
+    }
+    
+    ImGui::Spacing();
+    
+    // RTS and WAY buttons (new row)
+    if (rtsMode && wayMode) {
+        // RTS Button (Purple)
+        if (isRtsMode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.6f, 0.3f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.7f, 0.4f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.8f, 0.5f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25f, 0.15f, 0.4f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.2f, 0.5f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.45f, 0.3f, 0.6f, 1.0f));
+        }
+        
+        if (ImGui::Button("RTS", ImVec2(60, 40))) {
+            // Toggle RTS mode - disable other modes
+            bool newState = !(*rtsMode)[selectedRover];
+            (*rtsMode)[selectedRover] = newState;
+            if (newState) {
+                (*wayMode)[selectedRover] = false;
+                if (manualControl) (*manualControl)[selectedRover] = false;
+                followRover = false;
+                std::cout << "RTS mode ENABLED for rover " << (selectedRover + 1) << " - click terrain to set destination\n";
+            } else {
+                std::cout << "RTS mode DISABLED for rover " << (selectedRover + 1) << "\n";
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Click terrain to pathfind to that location");
+        }
+        ImGui::PopStyleColor(3);
+        
+        ImGui::SameLine();
+        
+        // WAY Button (Cyan)
+        if (isWayMode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.7f, 0.9f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.8f, 1.0f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.9f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.3f, 0.4f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.4f, 0.5f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.2f, 0.5f, 0.6f, 1.0f));
+        }
+        
+        if (ImGui::Button("WAY", ImVec2(60, 40))) {
+            // Toggle WAY mode - disable other modes
+            bool newState = !(*wayMode)[selectedRover];
+            (*wayMode)[selectedRover] = newState;
+            if (newState) {
+                (*rtsMode)[selectedRover] = false;
+                if (manualControl) (*manualControl)[selectedRover] = false;
+                followRover = false;
+                std::cout << "WAY mode ENABLED for rover " << (selectedRover + 1) << " - auto waypoint exploration\n";
+            } else {
+                std::cout << "WAY mode DISABLED for rover " << (selectedRover + 1) << "\n";
+            }
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Auto-spawn waypoints for autonomous exploration");
+        }
+        ImGui::PopStyleColor(3);
     }
     
     ImGui::Spacing();

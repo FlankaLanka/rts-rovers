@@ -8,6 +8,8 @@
 #include "render/Camera.h"
 #include "render/CircleRenderer.h"
 #include "terrain/TerrainOperation.h"
+#include "pathfinding/AStar.h"
+#include "pathfinding/PathRenderer.h"
 #include "ui/UIManager.h"
 
 #include <glad/glad.h>
@@ -15,6 +17,7 @@
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <vector>
 
 namespace terrafirma {
 
@@ -40,6 +43,9 @@ private:
     void render();
     void networkThreadFunc();
     void handleCircleDrawing(double mouseX, double mouseY, bool pressed, bool released);
+    void handleRTSClick(double mouseX, double mouseY);
+    void updatePathMovement(int roverIndex, float deltaTime);
+    void spawnWaypoint(int roverIndex);
 
     GLFWwindow* m_window = nullptr;
     int m_windowWidth = 1280;
@@ -73,6 +79,22 @@ private:
     
     // Manual control mode (Button 3) - per rover
     std::array<bool, NUM_ROVERS> m_manualControl{};
+    
+    // RTS mode (Button 4) - click to pathfind
+    std::array<bool, NUM_ROVERS> m_rtsMode{};
+    
+    // WAY mode (Button 5) - auto waypoint
+    std::array<bool, NUM_ROVERS> m_wayMode{};
+    
+    // Pathfinding state per rover
+    std::array<std::vector<glm::vec3>, NUM_ROVERS> m_currentPath{};
+    std::array<size_t, NUM_ROVERS> m_pathIndex{};       // Current waypoint index
+    std::array<glm::vec3, NUM_ROVERS> m_pathDestination{};  // Final destination
+    std::array<bool, NUM_ROVERS> m_hasPath{};           // Whether rover has active path
+    
+    // Pathfinding and rendering
+    std::unique_ptr<AStar> m_pathfinder;
+    std::unique_ptr<PathRenderer> m_pathRenderer;
 
     // Render settings
     RenderSettings m_renderSettings;
@@ -87,6 +109,11 @@ private:
     static constexpr float THIRD_PERSON_DISTANCE = 30.0f;
     static constexpr float THIRD_PERSON_HEIGHT = 15.0f;
     static constexpr float ROVER_MOVE_SPEED = 20.0f;
+    
+    // Pathfinding movement settings
+    static constexpr float PATH_MOVE_SPEED = 10.0f;      // Meters per second
+    static constexpr float PATH_WAYPOINT_DIST = 2.0f;    // Distance to consider waypoint reached
+    static constexpr float PATH_HOVER_HEIGHT = 3.0f;     // Hover height above terrain
 };
 
 } // namespace terrafirma
