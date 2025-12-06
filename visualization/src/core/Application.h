@@ -6,6 +6,8 @@
 #include "data/DataManager.h"
 #include "render/Renderer.h"
 #include "render/Camera.h"
+#include "render/CircleRenderer.h"
+#include "terrain/TerrainOperation.h"
 #include "ui/UIManager.h"
 
 #include <glad/glad.h>
@@ -37,6 +39,7 @@ private:
     void update(float deltaTime);
     void render();
     void networkThreadFunc();
+    void handleCircleDrawing(double mouseX, double mouseY, bool pressed, bool released);
 
     GLFWwindow* m_window = nullptr;
     int m_windowWidth = 1280;
@@ -51,6 +54,8 @@ private:
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<Camera> m_camera;
     std::unique_ptr<UIManager> m_uiManager;
+    std::unique_ptr<CircleRenderer> m_circleRenderer;
+    std::unique_ptr<TerrainOperationManager> m_opManager;
 
     // Network thread
     std::thread m_networkThread;
@@ -68,7 +73,12 @@ private:
 
     // Render settings
     RenderSettings m_renderSettings;
+    
+    // Circle drawing state
+    bool m_isDrawingCircle = false;
+    glm::vec2 m_circleStart{0.0f};
+    glm::vec2 m_circleCenter{0.0f};
+    float m_circleRadius = 0.0f;
 };
 
 } // namespace terrafirma
-

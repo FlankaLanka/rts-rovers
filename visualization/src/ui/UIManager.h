@@ -5,6 +5,7 @@
 #include "data/DataManager.h"
 #include "render/Camera.h"
 #include "network/UDPReceiver.h"
+#include "terrain/TerrainOperation.h"
 
 struct GLFWwindow;
 
@@ -20,21 +21,30 @@ public:
     
     void renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
                       int& selectedRover, bool& followRover,
-                      RenderSettings& settings, float fps, Camera* camera);
+                      RenderSettings& settings, float fps, Camera* camera,
+                      TerrainOperationManager* opManager);
     
     bool wantCaptureMouse() const;
     bool wantCaptureKeyboard() const;
+    
+    // Terrain operation UI state
+    bool isDrawingCircle() const { return m_isDrawingCircle; }
+    void setDrawingCircle(bool drawing) { m_isDrawingCircle = drawing; }
 
 private:
     void renderRoverPanel(DataManager* dataManager, int& selectedRover);
     void renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
-                           int selectedRover, bool& followRover, Camera* camera);
+                           int selectedRover, bool& followRover, Camera* camera,
+                           TerrainOperationManager* opManager);
     void renderSettingsPanel(RenderSettings& settings);
     void renderSystemPanel(DataManager* dataManager, float fps);
+    void renderOperationPanel(TerrainOperationManager* opManager, int selectedRover);
     
     GLFWwindow* m_window;
     SciFiTheme m_theme;
+    
+    // Circle drawing state
+    bool m_isDrawingCircle = false;
 };
 
 } // namespace terrafirma
-

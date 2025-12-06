@@ -1,7 +1,9 @@
 #include "core/Application.h"
+#include "terrain/TerrainRaycast.h"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 
 namespace terrafirma {
 
@@ -67,9 +69,16 @@ bool Application::init() {
     m_camera = std::make_unique<Camera>(glm::vec3(300.0f, 150.0f, 0.0f));
     m_renderer = std::make_unique<Renderer>();
     m_uiManager = std::make_unique<UIManager>(m_window);
+    m_circleRenderer = std::make_unique<CircleRenderer>();
+    m_opManager = std::make_unique<TerrainOperationManager>();
 
     if (!m_renderer->init()) {
         std::cerr << "Failed to initialize renderer\n";
+        return false;
+    }
+
+    if (!m_circleRenderer->init()) {
+        std::cerr << "Failed to initialize circle renderer\n";
         return false;
     }
 
@@ -108,6 +117,8 @@ void Application::shutdown() {
     }
 
     m_uiManager.reset();
+    m_circleRenderer.reset();
+    m_opManager.reset();
     m_renderer.reset();
     m_networkReceiver.reset();
     m_dataManager.reset();
@@ -144,6 +155,11 @@ void Application::update(float deltaTime) {
     // Update data manager (interpolation)
     m_dataManager->update(deltaTime);
     
+    // Update terrain operations
+    if (m_opManager) {
+        m_opManager->update(deltaTime, *m_dataManager);
+    }
+    
     // Update rover online status using same time source as RoverData
     static auto startTime = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
@@ -161,6 +177,97 @@ void Application::update(float deltaTime) {
         glm::vec3 targetPos = rover.position + glm::vec3(-50, 0, 50);
         m_camera->setPosition(glm::mix(m_camera->getPosition(), targetPos, deltaTime * 3.0f));
         m_camera->lookAt(rover.position);
+    }
+    
+    // Sync circle drawing state with UI
+    if (m_uiManager) {
+        auto& op = m_opManager->getOperation(m_selectedRover);
+        m_isDrawingCircle = (op.getState() == OperationState::DRAWING);
+    }
+}
+
+void Application::handleCircleDrawing(double mouseX, double mouseY, bool pressed, bool released) {
+    if (!m_opManager) return;
+    
+    auto& op = m_opManager->getOperation(m_selectedRover);
+    
+    if (op.getState() != OperationState::DRAWING) {
+        m_isDrawingCircle = false;
+        return;
+    }
+    
+    // Get both window size and framebuffer size (may differ on Retina displays)
+    int fbWidth, fbHeight;
+    int winWidth, winHeight;
+    glfwGetFramebufferSize(m_window, &fbWidth, &fbHeight);
+    glfwGetWindowSize(m_window, &winWidth, &winHeight);
+    
+    // Convert mouse coordinates from window space to framebuffer space
+    float scaleX = (float)fbWidth / (float)winWidth;
+    float scaleY = (float)fbHeight / (float)winHeight;
+    float fbMouseX = (float)mouseX * scaleX;
+    float fbMouseY = (float)mouseY * scaleY;
+    
+    glm::mat4 view = m_camera->getViewMatrix();
+    glm::mat4 projection = glm::perspective(glm::radians(45.0f), 
+        (float)fbWidth / (float)fbHeight, 0.1f, 10000.0f);
+    
+    // Raycast to terrain using framebuffer coordinates
+    RaycastResult hit = raycastTerrain(
+        fbMouseX, fbMouseY,
+        fbWidth, fbHeight, view, projection,
+        m_dataManager->getTerrainGrid()
+    );
+    
+    // Fallback: if no terrain hit, intersect with a horizontal plane at average terrain height
+    if (!hit.hit) {
+        auto& terrain = m_dataManager->getTerrainGrid();
+        float planeY = (terrain.getMinHeight() + terrain.getMaxHeight()) * 0.5f;
+        if (terrain.getCells().empty()) {
+            planeY = 50.0f;  // Default height if no terrain data
+        }
+        
+        // Intersect ray with horizontal plane at planeY
+        glm::vec3 rayOrigin, rayDir;
+        screenToWorldRay(fbMouseX, fbMouseY,
+                        fbWidth, fbHeight, view, projection, rayOrigin, rayDir);
+        
+        // Plane intersection: solve rayOrigin.y + t * rayDir.y = planeY
+        if (std::abs(rayDir.y) > 0.0001f) {
+            float t = (planeY - rayOrigin.y) / rayDir.y;
+            if (t > 0.0f) {
+                hit.hit = true;
+                hit.position = rayOrigin + rayDir * t;
+                hit.distance = t;
+            }
+        }
+    }
+    
+    if (pressed && hit.hit) {
+        // Start drawing - record center
+        m_circleStart = glm::vec2(hit.position.x, hit.position.z);
+        m_circleCenter = m_circleStart;
+        m_circleRadius = 0.0f;
+        m_isDrawingCircle = true;  // Mark that we've started drawing
+        op.updateDrawing(m_circleCenter, 0.0f);
+        std::cout << "Circle drawing started at (" << m_circleStart.x << ", " << m_circleStart.y << ")\n";
+    } else if (m_isDrawingCircle && hit.hit) {
+        // Update radius during drag
+        glm::vec2 currentPos(hit.position.x, hit.position.z);
+        m_circleRadius = glm::length(currentPos - m_circleStart);
+        m_circleCenter = m_circleStart;
+        op.updateDrawing(m_circleCenter, m_circleRadius);
+    }
+    
+    if (released && m_circleRadius > 0.5f) {
+        // Finish drawing
+        std::cout << "Circle drawing finished: center=(" << m_circleCenter.x << ", " << m_circleCenter.y 
+                  << ") radius=" << m_circleRadius << "\n";
+        op.finishDrawing();
+        m_isDrawingCircle = false;
+    } else if (released) {
+        // Released but circle too small - stay in drawing state
+        m_isDrawingCircle = false;
     }
 }
 
@@ -201,6 +308,28 @@ void Application::render() {
     }
 
     m_renderer->end();
+    
+    // Render operation circles
+    if (m_opManager && m_circleRenderer) {
+        for (int i = 0; i < NUM_ROVERS; i++) {
+            auto& op = m_opManager->getOperation(i);
+            if (op.isActive() && op.getRadius() > 0.1f) {
+                // Red semi-transparent circle for dig/pile area
+                glm::vec4 circleColor(1.0f, 0.2f, 0.2f, 0.5f);  // Red with 50% alpha
+                
+                // Different tint based on operation type
+                if (op.getType() == OperationType::PILE) {
+                    circleColor = glm::vec4(0.8f, 0.5f, 0.2f, 0.5f);  // Orange for pile
+                }
+                
+                m_circleRenderer->render(
+                    op.getCenter(), op.getRadius(), circleColor,
+                    m_dataManager->getTerrainGrid(),
+                    view, projection
+                );
+            }
+        }
+    }
 
     // Render UI
     m_uiManager->begin();
@@ -211,7 +340,8 @@ void Application::render() {
         m_followRover,
         m_renderSettings,
         m_timer.getFPS(),
-        m_camera.get()
+        m_camera.get(),
+        m_opManager.get()
     );
     m_uiManager->end();
 }
@@ -233,6 +363,17 @@ void Application::keyCallback(GLFWwindow* window, int key, int scancode, int act
     if (action == GLFW_PRESS) {
         switch (key) {
             case GLFW_KEY_ESCAPE:
+                // Cancel any active circle drawing first
+                if (g_app->m_opManager) {
+                    auto& op = g_app->m_opManager->getOperation(g_app->m_selectedRover);
+                    if (op.getState() == OperationState::DRAWING || 
+                        op.getState() == OperationState::CONFIRMING) {
+                        op.cancel();
+                        g_app->m_isDrawingCircle = false;
+                        return;
+                    }
+                }
+                
                 if (g_app->m_mouseCapture) {
                     g_app->m_mouseCapture = false;
                     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
@@ -279,7 +420,26 @@ void Application::mouseButtonCallback(GLFWwindow* window, int button, int action
     if (g_app->m_uiManager && g_app->m_uiManager->wantCaptureMouse()) {
         return;
     }
+    
+    // Handle circle drawing with left mouse button
+    if (button == GLFW_MOUSE_BUTTON_LEFT) {
+        double mouseX, mouseY;
+        glfwGetCursorPos(window, &mouseX, &mouseY);
+        
+        bool pressed = (action == GLFW_PRESS);
+        bool released = (action == GLFW_RELEASE);
+        
+        // Check if we should be drawing
+        if (g_app->m_opManager) {
+            auto& op = g_app->m_opManager->getOperation(g_app->m_selectedRover);
+            if (op.getState() == OperationState::DRAWING) {
+                g_app->handleCircleDrawing(mouseX, mouseY, pressed, released);
+                return;
+            }
+        }
+    }
 
+    // Camera rotation with right mouse button
     if (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) {
         g_app->m_mouseCapture = true;
         // Skip the next few cursor events to avoid snapping from GLFW cursor warp
@@ -295,7 +455,18 @@ void Application::mouseButtonCallback(GLFWwindow* window, int button, int action
 void Application::cursorPosCallback(GLFWwindow* window, double xpos, double ypos) {
     (void)window;
     
-    if (!g_app || !g_app->m_mouseCapture) return;
+    if (!g_app) return;
+    
+    // Handle circle drawing updates during drag
+    if (g_app->m_opManager) {
+        auto& op = g_app->m_opManager->getOperation(g_app->m_selectedRover);
+        if (op.getState() == OperationState::DRAWING && 
+            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) {
+            g_app->handleCircleDrawing(xpos, ypos, false, false);
+        }
+    }
+    
+    if (!g_app->m_mouseCapture) return;
 
     float x = static_cast<float>(xpos);
     float y = static_cast<float>(ypos);
@@ -345,4 +516,3 @@ void Application::framebufferSizeCallback(GLFWwindow* window, int width, int hei
 }
 
 } // namespace terrafirma
-

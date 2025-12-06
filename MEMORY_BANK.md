@@ -79,7 +79,8 @@ terrafirma-rovers/
 │   │   ├── core/       # Application, Timer
 │   │   ├── data/       # DataManager, PointCloud, RoverData
 │   │   ├── network/    # UDPReceiver, PacketParser
-│   │   ├── render/     # Camera, Renderer, PointCloudRenderer, etc.
+│   │   ├── render/     # Camera, Renderer, PointCloudRenderer, CircleRenderer
+│   │   ├── terrain/    # TerrainRaycast, TerrainOperation
 │   │   └── ui/         # UIManager, SciFiTheme
 │   ├── include/        # common.h
 │   └── external/       # glad, imgui
@@ -99,6 +100,9 @@ terrafirma-rovers/
 | `PointCloud` | Thread-safe LiDAR point storage |
 | `Camera` | Free-fly camera with Y-up |
 | `Renderer` | Orchestrates all rendering (5 point cloud renderers) |
+| `TerrainOperation` | Dig/pile state machine and logic |
+| `TerrainOperationManager` | Manages operations for all rovers |
+| `CircleRenderer` | Renders semi-transparent circles on terrain |
 
 ---
 
@@ -111,6 +115,46 @@ terrafirma-rovers/
 - **True pause**: Emulator stops reading .dat file, resumes from same position
 - **Visual indicator**: Paused rovers are dimmed and red-tinted
 - Click button in UI to toggle state
+
+### Dig/Pile Operations (Button 1 & 2)
+
+#### Button 1 - DIG
+Lowers terrain within a user-defined circular area.
+
+#### Button 2 - PILE
+Raises terrain within a user-defined circular area.
+
+#### Operation Flow:
+1. **Click DIG/PILE button** → Enters DRAWING state
+2. **Click and drag on terrain** → Draws circle (center at click, radius at release)
+3. **Release mouse** → Enters CONFIRMING state, shows confirm/redo panel
+4. **Click CONFIRM** → Rover moves to dig site
+5. **Rover arrives** → Operation begins (terrain changes in 5m steps)
+6. **Auto-completes** at 25m depth OR **click button again to cancel**
+
+#### Operation Constants:
+| Parameter | Value |
+|-----------|-------|
+| Max Depth | 25m |
+| Dig/Pile Rate | 1 m/s |
+| Depth Steps | 5m increments |
+| Move Speed | 5 m/s |
+| Hover Height | 3m above terrain |
+| Arrival Threshold | 1m |
+
+#### Technical Details:
+- **TerrainRaycast**: Converts mouse screen position to world ray, intersects with terrain grid
+- **Retina display fix**: Converts window coords to framebuffer coords for accurate raycasting
+- **CircleRenderer**: Renders semi-transparent filled circle (red for dig, orange for pile)
+- **Rover control**: When rover is MOVING/OPERATING, UDP pose updates are blocked (`m_roverControlled` flag)
+- **Interpolation skip**: Controlled rovers skip position interpolation to prevent fighting
+
+#### State Machine:
+```
+IDLE → DRAWING → CONFIRMING → MOVING → OPERATING → IDLE
+         ↑          │
+         └──(redo)──┘
+```
 
 ### Point Cloud Rendering
 - **Separate GPU buffer per rover** to prevent data overwriting
@@ -153,6 +197,14 @@ terrafirma-rovers/
 **Problem**: Sensor noise from emulator caused jerky movement.
 **Solution**: Exponential smoothing with angle wrapping for rotation.
 
+### 9. Dig Site Location Wrong
+**Problem**: Mouse coordinates not converted for Retina displays.
+**Solution**: Scale mouse coords by (framebuffer size / window size).
+
+### 10. Rover Not Moving to Dig Site
+**Problem**: Interpolation kept overwriting position set by operation.
+**Solution**: Skip `interpolate()` when rover is controlled by operation.
+
 ---
 
 ## Known Issues (TODO)
@@ -190,7 +242,17 @@ terrafirma-rovers/
 | 1-5 | Select rover |
 | F | Follow selected rover |
 | F11 | Toggle fullscreen |
-| ESC | Release mouse / Exit |
+| ESC | Cancel operation / Release mouse / Exit |
+
+### Dig/Pile Controls
+| Input | Action |
+|-------|--------|
+| DIG button | Start dig operation (or cancel if digging) |
+| PILE button | Start pile operation (or cancel if piling) |
+| Left-click + drag | Draw circle on terrain |
+| CONFIRM | Start rover movement to site |
+| REDO | Redraw circle |
+| STOP/CANCEL | Cancel operation |
 
 ---
 
@@ -238,6 +300,7 @@ cd visualization/build
 7. **Window**: 1280x720, resizable, fullscreen supported
 8. **UI theme**: Sci-fi (dark with cyan/orange accents)
 9. **Engine control**: Button 0 = true pause (emulator stops reading file)
+10. **Dig/Pile**: 25m max depth, 5m step increments, 1 m/s rate
 
 ---
 
@@ -251,7 +314,7 @@ cd visualization/build
 - [ ] Terrain LOD system
 - [ ] Waypoint/path visualization
 - [ ] Recording/playback functionality
-- [ ] Implement buttons 1-3 functionality
+- [ ] Button 3 functionality (TBD)
 
 ---
 
@@ -260,4 +323,4 @@ cd visualization/build
 
 ---
 
-*Last updated: December 5, 2025*
+*Last updated: December 6, 2025*

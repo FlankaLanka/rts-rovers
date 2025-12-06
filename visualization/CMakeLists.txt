@@ -71,6 +71,9 @@ set(APP_SOURCES
     src/render/RoverRenderer.cpp
     src/render/PointCloudRenderer.cpp
     src/render/TerrainRenderer.cpp
+    src/render/CircleRenderer.cpp
+    src/terrain/TerrainRaycast.cpp
+    src/terrain/TerrainOperation.cpp
     src/ui/UIManager.cpp
     src/ui/SciFiTheme.cpp
 )

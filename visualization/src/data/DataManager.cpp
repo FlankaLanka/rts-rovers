@@ -60,8 +60,15 @@ DataManager::DataManager()
 
 void DataManager::updateRoverPose(int roverId, const PosePacket& pose) {
     if (roverId < 1 || roverId > NUM_ROVERS) return;
+    
+    // Skip UDP pose updates if rover is being controlled by an operation
+    int index = roverId - 1;
+    if (m_roverControlled[index].load()) {
+        return;
+    }
+    
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_rovers[roverId - 1].updatePose(pose);
+    m_rovers[index].updatePose(pose);
 }
 
 void DataManager::updateRoverTelemetry(int roverId, const VehicleTelem& telem) {
@@ -72,8 +79,11 @@ void DataManager::updateRoverTelemetry(int roverId, const VehicleTelem& telem) {
 
 void DataManager::update(float deltaTime) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    for (auto& rover : m_rovers) {
-        rover.interpolate(deltaTime);
+    for (int i = 0; i < NUM_ROVERS; i++) {
+        // Only interpolate if rover is NOT being controlled by an operation
+        if (!m_roverControlled[i].load()) {
+            m_rovers[i].interpolate(deltaTime);
+        }
     }
     // Point clouds handle their own sync in the renderer
     m_terrain.checkDirty();
@@ -124,6 +134,16 @@ void DataManager::setRoverEngineRunning(int index, bool running) {
     if (index < 0 || index >= NUM_ROVERS) return;
     std::lock_guard<std::mutex> lock(m_mutex);
     m_rovers[index].setEngineRunning(running);
+}
+
+bool DataManager::isRoverControlled(int index) const {
+    if (index < 0 || index >= NUM_ROVERS) return false;
+    return m_roverControlled[index].load();
+}
+
+void DataManager::setRoverControlled(int index, bool controlled) {
+    if (index < 0 || index >= NUM_ROVERS) return;
+    m_roverControlled[index].store(controlled);
 }
 
 } // namespace terrafirma

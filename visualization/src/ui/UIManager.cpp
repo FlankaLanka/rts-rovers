@@ -39,11 +39,16 @@ void UIManager::end() {
 
 void UIManager::renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
                              int& selectedRover, bool& followRover,
-                             RenderSettings& settings, float fps, Camera* camera) {
+                             RenderSettings& settings, float fps, Camera* camera,
+                             TerrainOperationManager* opManager) {
     renderRoverPanel(dataManager, selectedRover);
-    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera);
+    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera, opManager);
     renderSettingsPanel(settings);
     renderSystemPanel(dataManager, fps);
+    
+    if (opManager) {
+        renderOperationPanel(opManager, selectedRover);
+    }
 }
 
 void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
@@ -79,8 +84,11 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
         ImGui::TextColored(ImVec4(color.r, color.g, color.b, 1.0f), "ROVER %02d", i + 1);
         
         // Engine status indicator (same line as rover name)
+        // Only show [ON] if rover is actually online and engine running
         ImGui::SameLine();
-        if (engineRunning) {
+        if (!rover.online) {
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "[--]");  // Offline - unknown state
+        } else if (engineRunning) {
             ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "[ON]");
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "[OFF]");
@@ -111,9 +119,10 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
 }
 
 void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
-                                   int selectedRover, bool& followRover, Camera* camera) {
+                                   int selectedRover, bool& followRover, Camera* camera,
+                                   TerrainOperationManager* opManager) {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 310, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 500), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(300, 550), ImGuiCond_FirstUseEver);
     
     auto& rover = dataManager->getRover(selectedRover);
     bool engineRunning = dataManager->isRoverEngineRunning(selectedRover);
@@ -152,28 +161,55 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
     
     ImGui::Spacing();
     
-    // Button states
+    // Button states / Controls
     ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "CONTROLS");
     ImGui::Separator();
+    
+    // Get operation state for this rover
+    TerrainOperation* op = opManager ? &opManager->getOperation(selectedRover) : nullptr;
+    OperationState opState = op ? op->getState() : OperationState::IDLE;
     
     for (int i = 0; i < 4; i++) {
         bool isOn = (rover.buttonStates >> i) & 1;
         
-        // Button 0 (engine): Green for ON, Red for OFF
-        // Other buttons: Orange for ON, Dark for OFF
+        // Button styling based on type and state
         if (i == 0) {
+            // Button 0 (engine): Green for ON, Red for OFF
             if (isOn) {
-                // Green for engine ON
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.6f, 0.2f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.0f, 0.7f, 0.3f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.8f, 0.4f, 1.0f));
             } else {
-                // Red for engine OFF
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.1f, 0.1f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.2f, 0.2f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.9f, 0.3f, 0.3f, 1.0f));
             }
+        } else if (i == 1) {
+            // Button 1 (DIG): Blue colors
+            bool isDigging = op && op->getType() == OperationType::DIG && opState != OperationState::IDLE;
+            if (isDigging) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.3f, 0.5f, 0.9f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.4f, 0.6f, 1.0f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.2f, 0.4f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.3f, 0.5f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.4f, 0.6f, 1.0f));
+            }
+        } else if (i == 2) {
+            // Button 2 (PILE): Brown/Orange colors
+            bool isPiling = op && op->getType() == OperationType::PILE && opState != OperationState::IDLE;
+            if (isPiling) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.5f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.6f, 0.3f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.7f, 0.4f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.4f, 0.25f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.5f, 0.35f, 0.2f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.45f, 0.3f, 1.0f));
+            }
         } else {
+            // Button 3: Default styling
             if (isOn) {
                 ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
@@ -185,28 +221,66 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
             }
         }
         
+        // Button labels
         char label[16];
         if (i == 0) {
-            // Button 0 is engine control - show "ON" or "OFF"
             snprintf(label, sizeof(label), isOn ? "ON" : "OFF");
+        } else if (i == 1) {
+            snprintf(label, sizeof(label), "DIG");
+        } else if (i == 2) {
+            snprintf(label, sizeof(label), "PILE");
         } else {
-            // Other buttons show "BTN X" for now
             snprintf(label, sizeof(label), "BTN %d", i);
         }
         
-        // Make button 0 clickable to toggle engine
-        if (i == 0) {
-            if (ImGui::Button(label, ImVec2(60, 40))) {
-                // Toggle button 0 (engine)
+        // Button click handling
+        if (ImGui::Button(label, ImVec2(60, 40))) {
+            if (i == 0) {
+                // Toggle engine
                 uint8_t newState = rover.buttonStates ^ (1 << 0);
                 udpReceiver->sendCommand(selectedRover + 1, newState);
+            } else if (i == 1 && op) {
+                // DIG button
+                if (opState == OperationState::IDLE) {
+                    // Start drawing circle for dig
+                    op->startDrawing(OperationType::DIG);
+                    m_isDrawingCircle = true;
+                } else if (op->getType() == OperationType::DIG) {
+                    // Cancel current dig operation
+                    op->cancel();
+                    m_isDrawingCircle = false;
+                }
+            } else if (i == 2 && op) {
+                // PILE button
+                if (opState == OperationState::IDLE) {
+                    // Start drawing circle for pile
+                    op->startDrawing(OperationType::PILE);
+                    m_isDrawingCircle = true;
+                } else if (op->getType() == OperationType::PILE) {
+                    // Cancel current pile operation
+                    op->cancel();
+                    m_isDrawingCircle = false;
+                }
             }
-            if (ImGui::IsItemHovered()) {
+        }
+        
+        // Tooltips
+        if (ImGui::IsItemHovered()) {
+            if (i == 0) {
                 ImGui::SetTooltip("Click to %s engine", isOn ? "stop" : "start");
+            } else if (i == 1) {
+                if (opState == OperationState::IDLE) {
+                    ImGui::SetTooltip("Click to start DIG operation");
+                } else if (op && op->getType() == OperationType::DIG) {
+                    ImGui::SetTooltip("Click to cancel DIG operation");
+                }
+            } else if (i == 2) {
+                if (opState == OperationState::IDLE) {
+                    ImGui::SetTooltip("Click to start PILE operation");
+                } else if (op && op->getType() == OperationType::PILE) {
+                    ImGui::SetTooltip("Click to cancel PILE operation");
+                }
             }
-        } else {
-            // Other buttons are display-only for now
-            ImGui::Button(label, ImVec2(60, 40));
         }
         
         ImGui::PopStyleColor(3);
@@ -233,8 +307,98 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
     ImGui::End();
 }
 
+void UIManager::renderOperationPanel(TerrainOperationManager* opManager, int selectedRover) {
+    auto& op = opManager->getOperation(selectedRover);
+    OperationState state = op.getState();
+    
+    // Only show panel if operation is active
+    if (state == OperationState::IDLE) {
+        return;
+    }
+    
+    // Center the panel on screen
+    ImVec2 windowSize(300, 150);
+    ImVec2 screenSize = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2((screenSize.x - windowSize.x) * 0.5f, 100), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(windowSize, ImGuiCond_Always);
+    
+    const char* opTypeName = (op.getType() == OperationType::DIG) ? "DIG" : "PILE";
+    char title[64];
+    snprintf(title, sizeof(title), "%s OPERATION", opTypeName);
+    
+    ImGui::Begin(title, nullptr, 
+                 ImGuiWindowFlags_NoCollapse | 
+                 ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove);
+    
+    switch (state) {
+        case OperationState::DRAWING:
+            ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "DRAWING CIRCLE");
+            ImGui::Separator();
+            ImGui::Text("Click and drag on terrain to");
+            ImGui::Text("draw the %s area.", op.getType() == OperationType::DIG ? "dig" : "pile");
+            ImGui::Spacing();
+            if (op.getRadius() > 0) {
+                ImGui::Text("Radius: %.1f m", op.getRadius());
+            } else {
+                ImGui::Text("Click on terrain to start...");
+            }
+            break;
+            
+        case OperationState::CONFIRMING:
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "CONFIRM AREA");
+            ImGui::Separator();
+            ImGui::Text("Center: (%.1f, %.1f)", op.getCenter().x, op.getCenter().y);
+            ImGui::Text("Radius: %.1f m", op.getRadius());
+            ImGui::Spacing();
+            
+            // Confirm and Redo buttons
+            if (ImGui::Button("CONFIRM", ImVec2(120, 40))) {
+                op.confirm();
+                m_isDrawingCircle = false;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("REDO", ImVec2(120, 40))) {
+                op.redo();
+            }
+            break;
+            
+        case OperationState::MOVING:
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "MOVING TO SITE");
+            ImGui::Separator();
+            ImGui::Text("Rover moving to %s site...", op.getType() == OperationType::DIG ? "dig" : "pile");
+            ImGui::Spacing();
+            if (ImGui::Button("CANCEL", ImVec2(-1, 40))) {
+                op.cancel();
+            }
+            break;
+            
+        case OperationState::OPERATING:
+            {
+                const char* actionName = (op.getType() == OperationType::DIG) ? "DIGGING" : "PILING";
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "%s...", actionName);
+                ImGui::Separator();
+                
+                float progress = std::abs(op.getCurrentDepth()) / TerrainOperation::MAX_DEPTH;
+                ImGui::ProgressBar(progress, ImVec2(-1, 20));
+                ImGui::Text("Depth: %.2f / %.1f m", std::abs(op.getCurrentDepth()), TerrainOperation::MAX_DEPTH);
+                ImGui::Spacing();
+                
+                if (ImGui::Button("STOP", ImVec2(-1, 40))) {
+                    op.cancel();
+                }
+            }
+            break;
+            
+        default:
+            break;
+    }
+    
+    ImGui::End();
+}
+
 void UIManager::renderSettingsPanel(RenderSettings& settings) {
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 310, 470), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 310, 520), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 200), ImGuiCond_FirstUseEver);
     
     ImGui::Begin("RENDER OPTIONS", nullptr, ImGuiWindowFlags_NoCollapse);
@@ -281,4 +445,3 @@ bool UIManager::wantCaptureKeyboard() const {
 }
 
 } // namespace terrafirma
-

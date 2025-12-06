@@ -59,11 +59,16 @@ public:
     // Engine control (thread-safe)
     bool isRoverEngineRunning(int index) const;
     void setRoverEngineRunning(int index, bool running);
+    
+    // Operation control - when true, UDP pose updates are ignored
+    bool isRoverControlled(int index) const;
+    void setRoverControlled(int index, bool controlled);
 
 private:
     std::array<RoverData, NUM_ROVERS> m_rovers;
     std::array<PointCloud, NUM_ROVERS> m_pointClouds;
     TerrainGrid m_terrain;
+    std::array<std::atomic<bool>, NUM_ROVERS> m_roverControlled{};  // True when operation controls position
     
     mutable std::mutex m_mutex;
 };
