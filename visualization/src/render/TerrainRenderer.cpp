@@ -1,6 +1,7 @@
 #include "render/TerrainRenderer.h"
 #include <vector>
 #include <map>
+#include <algorithm>
 
 namespace terrafirma {
 
@@ -100,7 +101,9 @@ bool TerrainRenderer::init() {
 }
 
 void TerrainRenderer::updateMesh(const TerrainGrid& terrain) {
-    const auto& cells = terrain.getCells();
+    // IMPORTANT: Copy the cells map to avoid race condition with network thread
+    // The network thread may be modifying the map while we iterate
+    const auto cells = terrain.getCells();  // Copy, not reference!
     if (cells.empty()) return;
 
     float cellSize = terrain.getCellSize();
@@ -131,6 +134,7 @@ void TerrainRenderer::updateMesh(const TerrainGrid& terrain) {
     }
 
     // Create triangles for adjacent cells
+    // ONLY create triangles when ALL 4 corners of a quad exist
     for (const auto& [key, height] : cells) {
         (void)height;
         int cx = key.first;
@@ -145,21 +149,13 @@ void TerrainRenderer::updateMesh(const TerrainGrid& terrain) {
         bool hasForward = vertexIndices.find(forward) != vertexIndices.end();
         bool hasRightForward = vertexIndices.find(rightForward) != vertexIndices.end();
         
-        // Form triangles if we have enough neighbors
+        // Only form triangles if we have ALL FOUR corners (complete quad)
         if (hasRight && hasForward && hasRightForward) {
             // Two triangles forming a quad
             indices.push_back(vertexIndices[key]);
             indices.push_back(vertexIndices[right]);
             indices.push_back(vertexIndices[rightForward]);
             
-            indices.push_back(vertexIndices[key]);
-            indices.push_back(vertexIndices[rightForward]);
-            indices.push_back(vertexIndices[forward]);
-        } else if (hasRight && hasRightForward) {
-            indices.push_back(vertexIndices[key]);
-            indices.push_back(vertexIndices[right]);
-            indices.push_back(vertexIndices[rightForward]);
-        } else if (hasForward && hasRightForward) {
             indices.push_back(vertexIndices[key]);
             indices.push_back(vertexIndices[rightForward]);
             indices.push_back(vertexIndices[forward]);
