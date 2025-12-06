@@ -1,15 +1,13 @@
 #include "data/RoverData.h"
+#include "TimeUtil.h"
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 
 namespace terrafirma {
 
-// Thread-safe time function (doesn't use GLFW)
+// Use shared time utility for consistent timestamps
 static double getCurrentTime() {
-    static auto startTime = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration<double>(now - startTime).count();
+    return TimeUtil::getTime();
 }
 
 RoverData::RoverData(int id) {

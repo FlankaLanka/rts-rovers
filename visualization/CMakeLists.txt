@@ -90,6 +90,7 @@ target_include_directories(terrafirma_viz PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/external  # For tiny_obj_loader.h
     ${IMGUI_DIR}
     ${IMGUI_DIR}/backends
 )
@@ -134,6 +135,9 @@ endif()
 
 # Copy shaders to build directory
 file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/src/render/shaders DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+# Copy assets folder to build directory (for model files)
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 
 # Installation
 install(TARGETS terrafirma_viz RUNTIME DESTINATION bin)

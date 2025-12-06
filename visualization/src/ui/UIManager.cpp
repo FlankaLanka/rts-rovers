@@ -4,6 +4,7 @@
 #include <imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
 #include <cstdio>
+#include <iostream>
 
 namespace terrafirma {
 
@@ -40,9 +41,10 @@ void UIManager::end() {
 void UIManager::renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
                              int& selectedRover, bool& followRover,
                              RenderSettings& settings, float fps, Camera* camera,
-                             TerrainOperationManager* opManager) {
-    renderRoverPanel(dataManager, selectedRover);
-    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera, opManager);
+                             TerrainOperationManager* opManager,
+                             std::array<bool, NUM_ROVERS>* manualControl) {
+    renderRoverPanel(dataManager, selectedRover, manualControl);
+    renderStatusPanel(dataManager, udpReceiver, selectedRover, followRover, camera, opManager, manualControl);
     renderSettingsPanel(settings);
     renderSystemPanel(dataManager, fps);
     
@@ -51,7 +53,8 @@ void UIManager::renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
     }
 }
 
-void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
+void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover,
+                                  std::array<bool, NUM_ROVERS>* manualControl) {
     ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(250, 450), ImGuiCond_FirstUseEver);
     
@@ -60,6 +63,7 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
     for (int i = 0; i < NUM_ROVERS; i++) {
         auto& rover = dataManager->getRover(i);
         bool engineRunning = dataManager->isRoverEngineRunning(i);
+        bool isManualControl = manualControl && (*manualControl)[i];
         
         ImGui::PushID(i);
         
@@ -83,19 +87,17 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
         glm::vec3 color = ROVER_COLORS[i];
         ImGui::TextColored(ImVec4(color.r, color.g, color.b, 1.0f), "ROVER %02d", i + 1);
         
-        // Engine status indicator (same line as rover name)
-        // Only show [ON] if rover is actually online and engine running
+        // Engine/Manual status indicator
         ImGui::SameLine();
         if (!rover.online) {
-            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "[--]");  // Offline - unknown state
+            ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "[--]");
+        } else if (isManualControl) {
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "[CTRL]");  // Yellow for manual control
         } else if (engineRunning) {
             ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "[ON]");
         } else {
             ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "[OFF]");
         }
-        
-        // Status
-        ImGui::Text("Status: %s", rover.online ? "ONLINE" : "OFFLINE");
         
         // Point count
         size_t points = dataManager->getPointCloud(i).getPointCount();
@@ -120,22 +122,26 @@ void UIManager::renderRoverPanel(DataManager* dataManager, int& selectedRover) {
 
 void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
                                    int selectedRover, bool& followRover, Camera* camera,
-                                   TerrainOperationManager* opManager) {
+                                   TerrainOperationManager* opManager,
+                                   std::array<bool, NUM_ROVERS>* manualControl) {
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 310, 10), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 550), ImGuiCond_FirstUseEver);
     
     auto& rover = dataManager->getRover(selectedRover);
     bool engineRunning = dataManager->isRoverEngineRunning(selectedRover);
+    bool isManualControl = manualControl && (*manualControl)[selectedRover];
     
     char title[64];
     snprintf(title, sizeof(title), "ROVER %02d STATUS", selectedRover + 1);
     
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
     
-    // Engine status indicator
-    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "ENGINE STATUS");
+    // Engine/Control status indicator
+    ImGui::TextColored(ImVec4(0.0f, 1.0f, 1.0f, 1.0f), "STATUS");
     ImGui::Separator();
-    if (engineRunning) {
+    if (isManualControl) {
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f), "MANUAL CONTROL - WASD to drive");
+    } else if (engineRunning) {
         ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.5f, 1.0f), "ENGINE: RUNNING");
     } else {
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.0f, 1.0f), "ENGINE: STOPPED");
@@ -209,15 +215,15 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.6f, 0.45f, 0.3f, 1.0f));
             }
         } else {
-            // Button 3: Default styling
-            if (isOn) {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.6f, 0.2f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.7f, 0.3f, 1.0f));
+            // Button 3 (CTRL): Yellow/Gold for manual control
+            if (isManualControl) {
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.6f, 0.0f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.7f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
             } else {
-                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.1f, 0.1f, 0.15f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.25f, 1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.3f, 0.3f, 0.35f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.25f, 0.1f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.35f, 0.15f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.5f, 0.45f, 0.2f, 1.0f));
             }
         }
         
@@ -229,6 +235,8 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
             snprintf(label, sizeof(label), "DIG");
         } else if (i == 2) {
             snprintf(label, sizeof(label), "PILE");
+        } else if (i == 3) {
+            snprintf(label, sizeof(label), "CTRL");
         } else {
             snprintf(label, sizeof(label), "BTN %d", i);
         }
@@ -241,7 +249,7 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
                 udpReceiver->sendCommand(selectedRover + 1, newState);
             } else if (i == 1 && op) {
                 // DIG button
-                if (opState == OperationState::IDLE) {
+                if (opState == OperationState::IDLE && !isManualControl) {
                     // Start drawing circle for dig
                     op->startDrawing(OperationType::DIG);
                     m_isDrawingCircle = true;
@@ -252,7 +260,7 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
                 }
             } else if (i == 2 && op) {
                 // PILE button
-                if (opState == OperationState::IDLE) {
+                if (opState == OperationState::IDLE && !isManualControl) {
                     // Start drawing circle for pile
                     op->startDrawing(OperationType::PILE);
                     m_isDrawingCircle = true;
@@ -260,6 +268,16 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
                     // Cancel current pile operation
                     op->cancel();
                     m_isDrawingCircle = false;
+                }
+            } else if (i == 3 && manualControl) {
+                // CTRL button - toggle manual control
+                (*manualControl)[selectedRover] = !(*manualControl)[selectedRover];
+                if ((*manualControl)[selectedRover]) {
+                    std::cout << "Manual control ENABLED for rover " << (selectedRover + 1) << "\n";
+                    // Disable follow mode when entering manual control
+                    followRover = false;
+                } else {
+                    std::cout << "Manual control DISABLED for rover " << (selectedRover + 1) << "\n";
                 }
             }
         }
@@ -280,6 +298,8 @@ void UIManager::renderStatusPanel(DataManager* dataManager, UDPReceiver* udpRece
                 } else if (op && op->getType() == OperationType::PILE) {
                     ImGui::SetTooltip("Click to cancel PILE operation");
                 }
+            } else if (i == 3) {
+                ImGui::SetTooltip("Click to %s manual control (WASD to drive)", isManualControl ? "disable" : "enable");
             }
         }
         

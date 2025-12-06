@@ -70,6 +70,9 @@ private:
     // Selected rover
     int m_selectedRover = 0;
     bool m_followRover = false;
+    
+    // Manual control mode (Button 3) - per rover
+    std::array<bool, NUM_ROVERS> m_manualControl{};
 
     // Render settings
     RenderSettings m_renderSettings;
@@ -79,6 +82,11 @@ private:
     glm::vec2 m_circleStart{0.0f};
     glm::vec2 m_circleCenter{0.0f};
     float m_circleRadius = 0.0f;
+    
+    // 3rd person camera settings
+    static constexpr float THIRD_PERSON_DISTANCE = 30.0f;
+    static constexpr float THIRD_PERSON_HEIGHT = 15.0f;
+    static constexpr float ROVER_MOVE_SPEED = 20.0f;
 };
 
 } // namespace terrafirma

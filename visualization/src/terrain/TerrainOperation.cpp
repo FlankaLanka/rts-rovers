@@ -54,10 +54,10 @@ void TerrainOperation::cancel() {
     m_appliedDepth = 0.0f;
 }
 
-bool TerrainOperation::update(float deltaTime, glm::vec3& roverPosition, TerrainGrid& terrain) {
+bool TerrainOperation::update(float deltaTime, glm::vec3& roverPosition, glm::vec3& roverRotation, TerrainGrid& terrain) {
     switch (m_state) {
         case OperationState::MOVING:
-            if (moveRover(deltaTime, roverPosition, terrain)) {
+            if (moveRover(deltaTime, roverPosition, roverRotation, terrain)) {
                 m_state = OperationState::OPERATING;
             }
             return false;
@@ -70,7 +70,7 @@ bool TerrainOperation::update(float deltaTime, glm::vec3& roverPosition, Terrain
     }
 }
 
-bool TerrainOperation::moveRover(float deltaTime, glm::vec3& roverPosition, const TerrainGrid& terrain) {
+bool TerrainOperation::moveRover(float deltaTime, glm::vec3& roverPosition, glm::vec3& roverRotation, const TerrainGrid& terrain) {
     // Calculate direction to circle center
     glm::vec2 roverXZ(roverPosition.x, roverPosition.z);
     glm::vec2 toTarget = m_center - roverXZ;
@@ -89,6 +89,28 @@ bool TerrainOperation::moveRover(float deltaTime, glm::vec3& roverPosition, cons
     roverXZ += direction * moveDistance;
     roverPosition.x = roverXZ.x;
     roverPosition.z = roverXZ.y;
+    
+    // Calculate yaw angle to face movement direction
+    // atan2 gives angle from +X axis, but our rover faces +Z when yaw=0
+    // So we need to adjust: yaw = atan2(dx, dz) in degrees
+    float targetYaw = glm::degrees(std::atan2(direction.x, direction.y));
+    
+    // Smoothly rotate toward target yaw
+    float yawDiff = targetYaw - roverRotation.y;
+    // Normalize to [-180, 180]
+    while (yawDiff > 180.0f) yawDiff -= 360.0f;
+    while (yawDiff < -180.0f) yawDiff += 360.0f;
+    
+    // Smooth rotation (about 5 degrees per frame at 60fps = 300 deg/s max)
+    float maxRotation = 300.0f * deltaTime;
+    if (std::abs(yawDiff) > maxRotation) {
+        yawDiff = (yawDiff > 0) ? maxRotation : -maxRotation;
+    }
+    roverRotation.y += yawDiff;
+    
+    // Keep roll and pitch at 0 (vehicle stays level)
+    roverRotation.x = 0.0f;
+    roverRotation.z = 0.0f;
     
     // Maintain hover height above terrain
     float terrainHeight = terrain.getMinHeight();
@@ -209,14 +231,16 @@ void TerrainOperationManager::update(float deltaTime, DataManager& dataManager) 
         dataManager.setRoverControlled(i, isControlling);
         
         if (isControlling) {
-            // Get rover position (need mutable reference)
+            // Get rover position and rotation (need mutable reference)
             auto& rover = dataManager.getRover(i);
             glm::vec3 pos = rover.position;
+            glm::vec3 rot = rover.rotation;
             
-            bool terrainModified = op.update(deltaTime, pos, dataManager.getTerrainGrid());
+            bool terrainModified = op.update(deltaTime, pos, rot, dataManager.getTerrainGrid());
             
-            // Update rover position if it moved
+            // Update rover position and rotation
             rover.position = pos;
+            rover.rotation = rot;
             
             // Mark terrain as needing update if modified
             if (terrainModified) {

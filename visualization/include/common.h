@@ -70,13 +70,18 @@ struct RoverState {
     double lastTimestamp = 0.0;
     bool online = false;
     
-    // Derived
+    // Derived - Y-up coordinate system
+    // rotation.x = roll (around X axis - unused for construction vehicles)
+    // rotation.y = yaw (around Y axis - turning left/right)
+    // rotation.z = pitch (around Z axis - unused for construction vehicles)
     glm::mat4 getModelMatrix() const {
         glm::mat4 model = glm::mat4(1.0f);
         model = glm::translate(model, position);
-        model = glm::rotate(model, glm::radians(rotation.z), glm::vec3(0, 0, 1)); // yaw
-        model = glm::rotate(model, glm::radians(rotation.y), glm::vec3(0, 1, 0)); // pitch
-        model = glm::rotate(model, glm::radians(rotation.x), glm::vec3(1, 0, 0)); // roll
+        // Apply rotations: yaw first (Y axis), then pitch (Z), then roll (X)
+        // Negate yaw to match camera rotation direction
+        model = glm::rotate(model, glm::radians(-rotation.y), glm::vec3(0, 1, 0)); // yaw around Y
+        model = glm::rotate(model, glm::radians(rotation.z), glm::vec3(0, 0, 1)); // pitch around Z
+        model = glm::rotate(model, glm::radians(rotation.x), glm::vec3(1, 0, 0)); // roll around X
         return model;
     }
 };

@@ -22,7 +22,8 @@ public:
     void renderMainUI(DataManager* dataManager, UDPReceiver* udpReceiver,
                       int& selectedRover, bool& followRover,
                       RenderSettings& settings, float fps, Camera* camera,
-                      TerrainOperationManager* opManager);
+                      TerrainOperationManager* opManager,
+                      std::array<bool, NUM_ROVERS>* manualControl);
     
     bool wantCaptureMouse() const;
     bool wantCaptureKeyboard() const;
@@ -32,10 +33,12 @@ public:
     void setDrawingCircle(bool drawing) { m_isDrawingCircle = drawing; }
 
 private:
-    void renderRoverPanel(DataManager* dataManager, int& selectedRover);
+    void renderRoverPanel(DataManager* dataManager, int& selectedRover,
+                          std::array<bool, NUM_ROVERS>* manualControl);
     void renderStatusPanel(DataManager* dataManager, UDPReceiver* udpReceiver,
                            int selectedRover, bool& followRover, Camera* camera,
-                           TerrainOperationManager* opManager);
+                           TerrainOperationManager* opManager,
+                           std::array<bool, NUM_ROVERS>* manualControl);
     void renderSettingsPanel(RenderSettings& settings);
     void renderSystemPanel(DataManager* dataManager, float fps);
     void renderOperationPanel(TerrainOperationManager* opManager, int selectedRover);

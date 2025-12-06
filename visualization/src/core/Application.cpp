@@ -1,5 +1,6 @@
 #include "core/Application.h"
 #include "terrain/TerrainRaycast.h"
+#include "TimeUtil.h"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -131,28 +132,84 @@ void Application::shutdown() {
 }
 
 void Application::processInput() {
-    // Camera movement with WASD - camera-relative (forward = where camera looks in XY plane)
-    float speed = m_camera->getSpeed() * m_timer.getDeltaTime();
+    float deltaTime = m_timer.getDeltaTime();
     
-    // W/S - move forward/back relative to camera direction
-    if (glfwGetKey(m_window, GLFW_KEY_W) == GLFW_PRESS)
-        m_camera->moveForward(speed);
-    if (glfwGetKey(m_window, GLFW_KEY_S) == GLFW_PRESS)
-        m_camera->moveForward(-speed);
+    // Check if we're in manual control mode for selected rover
+    bool inManualControl = m_manualControl[m_selectedRover];
     
-    // A/D - strafe left/right relative to camera direction
-    if (glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS)
-        m_camera->moveRight(-speed);
-    if (glfwGetKey(m_window, GLFW_KEY_D) == GLFW_PRESS)
-        m_camera->moveRight(speed);
-    
-    // Space - move up (always along Y axis)
-    if (glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS)
-        m_camera->moveUp(speed);
+    if (inManualControl) {
+        // Manual control: WASD moves the ROVER like a vehicle
+        auto& rover = m_dataManager->getRover(m_selectedRover);
+        float roverSpeed = ROVER_MOVE_SPEED * deltaTime;
+        
+        // Construction vehicles only rotate around Y axis (yaw only)
+        // In Y-up system: rotation.y = yaw (around Y axis)
+        // Clear roll and pitch completely
+        rover.rotation.x = 0.0f;  // No roll
+        rover.rotation.z = 0.0f;  // No pitch (in Y-up, Z is forward/back tilt)
+        
+        // Get rover's forward direction from yaw (rotation.y = yaw around Y axis)
+        float yawRad = glm::radians(rover.rotation.y);
+        // In Y-up: forward is along XZ plane, Y is up
+        // When yaw=0, forward is +Z. When yaw=90, forward is +X
+        glm::vec3 forward(-std::sin(yawRad), 0.0f, std::cos(yawRad));
+        
+        // W/S - move rover forward/back
+        if (glfwGetKey(m_window, GLFW_KEY_W) == GLFW_PRESS) {
+            rover.position += forward * roverSpeed;
+        }
+        if (glfwGetKey(m_window, GLFW_KEY_S) == GLFW_PRESS) {
+            rover.position -= forward * roverSpeed;
+        }
+        
+        // A/D - turn rover left/right (rotate around Y axis like a real vehicle)
+        float turnSpeed = 60.0f * deltaTime;  // 60 degrees per second
+        if (glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS) {
+            rover.rotation.y -= turnSpeed;  // Turn left
+        }
+        if (glfwGetKey(m_window, GLFW_KEY_D) == GLFW_PRESS) {
+            rover.rotation.y += turnSpeed;  // Turn right
+        }
+        
+        // Keep yaw in [-180, 180] range
+        while (rover.rotation.y > 180.0f) rover.rotation.y -= 360.0f;
+        while (rover.rotation.y < -180.0f) rover.rotation.y += 360.0f;
+        
+        // Maintain rover height above terrain
+        float terrainHeight = m_dataManager->getTerrainGrid().getMinHeight();
+        getTerrainHeightAt(m_dataManager->getTerrainGrid(), rover.position.x, rover.position.z, terrainHeight);
+        rover.position.y = terrainHeight + 2.0f;  // Hover slightly above terrain
+    } else {
+        // Normal mode: WASD moves the CAMERA
+        float speed = m_camera->getSpeed() * deltaTime;
+        
+        // W/S - move forward/back relative to camera direction
+        if (glfwGetKey(m_window, GLFW_KEY_W) == GLFW_PRESS)
+            m_camera->moveForward(speed);
+        if (glfwGetKey(m_window, GLFW_KEY_S) == GLFW_PRESS)
+            m_camera->moveForward(-speed);
+        
+        // A/D - strafe left/right relative to camera direction
+        if (glfwGetKey(m_window, GLFW_KEY_A) == GLFW_PRESS)
+            m_camera->moveRight(-speed);
+        if (glfwGetKey(m_window, GLFW_KEY_D) == GLFW_PRESS)
+            m_camera->moveRight(speed);
+        
+        // Space - move up (always along Y axis)
+        if (glfwGetKey(m_window, GLFW_KEY_SPACE) == GLFW_PRESS)
+            m_camera->moveUp(speed);
+    }
 }
 
 void Application::update(float deltaTime) {
-    // Update data manager (interpolation)
+    // Set manual control flags for all rovers (blocks UDP updates)
+    for (int i = 0; i < NUM_ROVERS; i++) {
+        // Rover is controlled if in manual mode OR in a dig/pile operation
+        bool controlled = m_manualControl[i] || m_opManager->isRoverControlled(i);
+        m_dataManager->setRoverControlled(i, controlled);
+    }
+    
+    // Update data manager (interpolation - skipped for controlled rovers)
     m_dataManager->update(deltaTime);
     
     // Update terrain operations
@@ -160,23 +217,41 @@ void Application::update(float deltaTime) {
         m_opManager->update(deltaTime, *m_dataManager);
     }
     
-    // Update rover online status using same time source as RoverData
-    static auto startTime = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    double currentTime = std::chrono::duration<double>(now - startTime).count();
+    // Update rover online status using shared time source
+    double currentTime = TimeUtil::getTime();
     
     for (int i = 0; i < NUM_ROVERS; i++) {
         auto& rover = m_dataManager->getRover(i);
         rover.online = (currentTime - rover.lastTimestamp) < OFFLINE_TIMEOUT;
     }
 
-    // Follow selected rover if enabled
-    if (m_followRover) {
+    // 3rd person camera for manual control OR follow mode
+    bool inManualControl = m_manualControl[m_selectedRover];
+    if (inManualControl || m_followRover) {
         auto& rover = m_dataManager->getRover(m_selectedRover);
-        // Position camera behind and above rover (in XY plane, Z is up)
-        glm::vec3 targetPos = rover.position + glm::vec3(-50, 0, 50);
-        m_camera->setPosition(glm::mix(m_camera->getPosition(), targetPos, deltaTime * 3.0f));
-        m_camera->lookAt(rover.position);
+        
+        // Calculate camera position behind the rover based on its yaw rotation
+        // In Y-up system: rotation.y = yaw (rotation around Y axis)
+        float yawRad = glm::radians(rover.rotation.y);
+        
+        // Forward direction of rover (where it's facing)
+        // When yaw=0, forward is +Z. When yaw=90, forward is -X
+        glm::vec3 forward(-std::sin(yawRad), 0.0f, std::cos(yawRad));
+        
+        // Camera is BEHIND the rover (opposite of forward direction)
+        glm::vec3 behindOffset = -forward * THIRD_PERSON_DISTANCE;
+        behindOffset.y = THIRD_PERSON_HEIGHT;  // Above the rover
+        
+        glm::vec3 targetCamPos = rover.position + behindOffset;
+        
+        // Smoothly move camera to target position
+        float smoothFactor = inManualControl ? 10.0f : 3.0f;  // Faster follow for manual control
+        m_camera->setPosition(glm::mix(m_camera->getPosition(), targetCamPos, deltaTime * smoothFactor));
+        
+        // Look at a point IN FRONT of the rover (where it's heading)
+        // This makes the camera face the same direction as the rover
+        glm::vec3 lookTarget = rover.position + forward * 20.0f + glm::vec3(0, 3.0f, 0);
+        m_camera->lookAt(lookTarget);
     }
     
     // Sync circle drawing state with UI
@@ -341,7 +416,8 @@ void Application::render() {
         m_renderSettings,
         m_timer.getFPS(),
         m_camera.get(),
-        m_opManager.get()
+        m_opManager.get(),
+        &m_manualControl
     );
     m_uiManager->end();
 }
@@ -467,6 +543,11 @@ void Application::cursorPosCallback(GLFWwindow* window, double xpos, double ypos
     }
     
     if (!g_app->m_mouseCapture) return;
+    
+    // Disable camera rotation in manual control mode
+    if (g_app->m_manualControl[g_app->m_selectedRover]) {
+        return;
+    }
 
     float x = static_cast<float>(xpos);
     float y = static_cast<float>(ypos);

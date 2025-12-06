@@ -64,12 +64,12 @@ public:
     
     // Update the operation each frame
     // Returns true if terrain was modified
-    bool update(float deltaTime, glm::vec3& roverPosition, TerrainGrid& terrain);
+    bool update(float deltaTime, glm::vec3& roverPosition, glm::vec3& roverRotation, TerrainGrid& terrain);
     
 private:
     // Move rover toward the dig site
     // Returns true when arrived
-    bool moveRover(float deltaTime, glm::vec3& roverPosition, const TerrainGrid& terrain);
+    bool moveRover(float deltaTime, glm::vec3& roverPosition, glm::vec3& roverRotation, const TerrainGrid& terrain);
     
     // Perform the dig/pile operation
     // Returns true if terrain was modified
